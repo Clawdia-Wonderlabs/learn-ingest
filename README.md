@@ -13,6 +13,7 @@ Point it at a course lesson, podcast transcript, article, or Google Drive folder
 - **E — Skill extraction** — identifies if the lesson could become a Claude skill
 - **F — Teach me** — Socratic back-and-forth to actually retain dense material
 - **G — Just archive** — saves to vault, nothing else
+- **H — Scan vault** — searches existing vault content by topic without ingesting anything new
 
 ## Installation
 
