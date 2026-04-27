@@ -11,3 +11,9 @@ Thumbs.db
 *.local.md
 personal/
 private/
+
+# Evals — local test data not for version control
+evals/local/
+
+# Vault content backups
+*.md.bak

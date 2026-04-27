@@ -2,8 +2,8 @@
 name: learn-ingest
 description: >
   Guided intake pipeline for learning materials — transcripts, course lessons, Drive folders, PDFs.
-  ALWAYS trigger on `/ingest-material`. Also triggers when you paste a transcript, drops a file path,
-  shares a Google Drive link to course content, or says anything like "ingest this", "add this to my vault",
+  ALWAYS trigger on `/ingest-material`. Also triggers when you paste a transcript, drop a file path,
+  share a Google Drive link to course content, or say anything like "ingest this", "add this to my vault",
   "I just watched a course on X", "save this lesson", "process this transcript", or "what should I do
   with this course content". Triggers on Skool lessons, YouTube transcripts, VTT files, and any
   structured learning content. When in doubt, trigger this skill.
@@ -35,6 +35,27 @@ The **Community** layer is new — it's the platform or group the course came fr
 
 This skill uses a guided intake conversation. Work through these steps in order. Don't front-load all the questions — ask one thing at a time, wait for the answer, then proceed.
 
+### Step 0: Pre-flight Vault Scan (always runs first)
+
+Before asking about material type, **automatically scan the vault** for existing content on the same topic. Extract keywords from what the user mentioned (course name, lesson title, or topic) and search:
+
+```bash
+grep -ri "<keywords>" ~/Your\ Vault/Courses/ --include="*.md" -l 2>/dev/null
+```
+
+Or use Python for a richer scan (see [H] Scan Vault below for the full implementation).
+
+**If matches found:** Report them before proceeding:
+> "Before we ingest — I found [N] related notes already in your vault:
+> - [Lesson Title] ([Course]) — [1-line summary or matching quote]
+> Want to review those first, pull one up, or proceed with new content?"
+
+**If no matches:** Skip silently and proceed to Step A.
+
+**Exception:** If invoked with a specific course/lesson already in context, skip the scan and proceed directly.
+
+---
+
 ### Step A: Material Type
 
 If invoked via `/ingest-material` with no arguments, ask:
@@ -64,7 +85,7 @@ If it's not course material (podcast, article, etc.), use a sensible default lik
 
 ### Step C: Source
 
-Point to the point to the source — or detect it from context:
+Ask for the source — or detect it from context:
 
 - **Pasted text**: use directly
 - **Local file path** (`.txt`, `.md`, `.vtt`, `.srt`): read the file
@@ -75,15 +96,15 @@ Point to the point to the source — or detect it from context:
 
 ### Step D: Action Selection (multi-select)
 
-After you have the source content in hand, ALWAYS present the full action menu exactly as shown below — including the plain-language description for each option. Never abbreviate it. you want the reminder of what each does every time.
+After you have the source content in hand, ALWAYS present the full action menu exactly as shown below — including the plain-language description for each option. Never abbreviate it. The user wants the reminder of what each does every time.
 
-Present it as checkboxes. Point to the reply with the letters she wants (e.g. "A C E") or say "all":
+Present it as checkboxes. Ask the user to reply with the letters they want (e.g. "A C E") or say "all":
 
 ---
 **What do you want to do with this?**
 *Check all that apply — reply with the letters, or say "all"*
 
-- [ ] **A — Insights** — I read it and tell you what matters: key ideas, frameworks, and what it actually changes about how you'd work. Good for when you just watched something and want the "so what."
+- [ ] **A — Insights** — I read it and tell you what matters: key ideas, frameworks, and what it actually changes about how you'd work. Good for when you just watched something and want the "so what." Action items auto-routed to Google Tasks by confidence score.
 
 - [ ] **B — Implement** — You want to build what's being taught. I pull out the actual steps and either kick off a GSD project or draft a phase for an existing one. Good for tutorials where there's something to deploy or configure.
 
@@ -97,9 +118,13 @@ Present it as checkboxes. Point to the reply with the letters she wants (e.g. "A
 
 - [ ] **G — Just archive** — Save it to the vault, nothing else. You want it there for reference but don't need to do anything with it right now.
 
+- [ ] **H — Scan vault** — Don't ingest anything new. Just search what's already in the vault on a topic. I search all course notes, mining extracts, and key quotes across every community and course. Good for "what do I already know about X?" before starting a project or revisiting a topic.
+
 ---
 
 If you say "all", run A through F in sequence (skip G since archiving is implicit when anything else is selected).
+
+**H is standalone** — if you select only H, skip the ingest flow entirely and go straight to the vault scan.
 
 ---
 
@@ -162,7 +187,7 @@ with open(os.path.join(lesson_dir, "<lesson-slug>.md"), "w") as f:
     f.write(content)
 ```
 
-Confirm: `"Saved to 3.Resources/Courses/<Community>/<Course Name>/<lesson-slug>.md"`
+Confirm: `"Saved to Courses/<Community>/<Course Name>/<lesson-slug>.md"`
 
 ---
 
@@ -187,6 +212,38 @@ Read the transcript carefully and deliver a structured debrief:
 ### What This Changes
 <practical implication — what should you do differently after this?>
 ```
+
+Then extract **action items** from the content and score each with a confidence value (0–100) based on:
+- **Specificity** (vague idea = low, concrete next step = high)
+- **Fit** (how directly it applies to your current projects)
+- **Effort** (quick win = higher, multi-week = lower unless critical)
+
+**Routing rules:**
+
+| Score | Action |
+|---|---|
+| 80–100 | Auto-create in Google Tasks (`account: personal`) — do it, don't ask |
+| 60–79 | List under **Flagged for Review** in the vault note — user decides |
+| < 60 | Silently omit |
+
+**Google Tasks format for auto-routed items:**
+```
+Title: [Action] — from [Lesson Name]
+Notes: Confidence: [N]/100 | Course: [Course Name] ([Community]) | [vault path]
+```
+
+**After routing**, append to the vault note:
+```markdown
+## Action Items
+
+### Auto-routed to Google Tasks
+- ✓ [action] (confidence: N)
+
+### Flagged for Review (60–79)
+- [ ] [action] (confidence: N) — [why flagged]
+```
+
+Use `mcp__google__tasks_add` with `account: personal` for all auto-routed items.
 
 ### [B] Implement
 
@@ -265,11 +322,96 @@ Socratic walkthrough — don't lecture:
 1. 2-sentence overview of what the lesson covers
 2. Present the first key concept with a concrete example from your actual work and projects
 3. Ask: "Does this connect to anything you're working on, or want to go deeper here?"
-4. Let you's response guide depth and direction
+4. Let your response guide depth and direction
 
 ### [G] Just Archive
 
-Confirm: "Archived at `3.Resources/Courses/<Community>/<Course>/<lesson>.md`. Nothing else to do."
+Confirm: "Archived at `Courses/<Community>/<Course>/<lesson>.md`. Nothing else to do."
+
+### [H] Scan Vault
+
+Search existing vault content for a topic without ingesting anything new. Use this standalone (when asked "what do I already know about X?") or as the pre-flight check at intake start.
+
+**When invoked standalone:** Ask "What topic do you want to search?" if no topic is obvious from context. Then run the scan below.
+
+**Implementation:**
+
+```python
+import os, glob, re
+
+def scan_vault(query_terms):
+    vault_base = os.path.expanduser("~/Your Vault/Courses")
+    terms = [t.lower() for t in query_terms]
+    results = []
+
+    for md_file in glob.glob(os.path.join(vault_base, "**/*.md"), recursive=True):
+        try:
+            with open(md_file, "r") as f:
+                content = f.read()
+        except:
+            continue
+
+        content_lower = content.lower()
+        hits = sum(1 for t in terms if t in content_lower)
+        if hits == 0:
+            continue
+
+        title = re.search(r'title:\s*"?([^"\n]+)"?', content)
+        course = re.search(r'course:\s*(.+)', content)
+        community = re.search(r'community:\s*(.+)', content)
+        date = re.search(r'date:\s*(.+)', content)
+
+        snippet = ""
+        for term in terms:
+            idx = content_lower.find(term)
+            if idx != -1:
+                start = max(0, idx - 60)
+                end = min(len(content), idx + 120)
+                snippet = "..." + content[start:end].replace("\n", " ").strip() + "..."
+                break
+
+        results.append({
+            "path": md_file.replace(os.path.expanduser("~"), "~"),
+            "title": title.group(1).strip() if title else os.path.basename(md_file),
+            "course": course.group(1).strip() if course else "?",
+            "community": community.group(1).strip() if community else "?",
+            "date": date.group(1).strip() if date else "?",
+            "hits": hits,
+            "snippet": snippet,
+            "is_mining": "/Mining/" in md_file,
+        })
+
+    results.sort(key=lambda x: (-x["hits"], x["date"]))
+    return results
+
+# Example — replace with actual query terms:
+results = scan_vault(["your", "topic", "keywords"])
+for r in results:
+    tag = "[mining]" if r["is_mining"] else "[lesson]"
+    print(f"{tag} {r['title']} — {r['course']} ({r['community']}, {r['date']})")
+    if r["snippet"]:
+        print(f"  {r['snippet']}")
+```
+
+**Output format:**
+
+```
+🔍 Vault scan: "[topic]"
+Found N notes across X courses
+
+📚 Lessons:
+1. [Title] — [Course] ([Community], [date])
+   → [matching snippet]
+   → Path: [path]
+
+🗂️ Mining extracts:
+1. [Title] — [Course]
+   → [matching snippet]
+
+Want me to pull up any of these, or proceed with new content?
+```
+
+**If zero results:** "Nothing in your vault yet on '[topic]'. Ready to ingest something new?"
 
 ---
 
@@ -283,7 +425,7 @@ When you provide a Drive folder or file link:
 4. If a file is a video/audio recording (MP4, MOV), note: "This is a video file — do you have a transcript for it, or should I skip it?"
 5. PDFs and text files: read and process normally
 
-When reading from the any Skool or online community Drive folder, look for:
+When reading from any Skool or online community Drive folder, look for:
 - Module/lesson folders (numbered or named)
 - Transcript files (`.vtt`, `.txt`, `.md`, `.pdf`)
 - Slide decks (note them but skip unless you want them ingested separately)
